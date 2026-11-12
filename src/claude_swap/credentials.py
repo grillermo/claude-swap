@@ -1037,6 +1037,26 @@ class CredentialStore:
                 "a running session may not hot-reload until restart"
             )
 
+    def _backup_keychain_enabled(self) -> bool:
+        """Whether per-account backups may touch the Keychain at all.
+
+        ``False`` off macOS, and on macOS when ``storage.backupKeychain`` is
+        off in settings.json: then the ``.enc`` files are the only backup
+        store, read and written without a single ``security`` call. Read per
+        call (one small file) so a ``cswap config set`` takes effect in a
+        long-running TUI or auto loop too.
+        """
+        if self._host.platform != Platform.MACOS:
+            return False
+        from claude_swap.settings import load_storage_settings
+
+        backup_root = self._host.credentials_dir.parent
+        return load_storage_settings(backup_root).backup_keychain
+
+    def _backup_uses_keychain(self) -> bool:
+        """Whether a backup write should target the Keychain right now."""
+        return self._backup_keychain_enabled() and self._use_keychain()
+
     def _uses_file_backup_backend(self) -> bool:
         """Whether per-account backup *writes* go to files vs. the Keychain.
 
@@ -1047,7 +1067,7 @@ class CredentialStore:
         no Keychain, so they use files too. Backup *reads* are ``.enc``-wins
         regardless (see ``_read_account_credentials``).
         """
-        return not self._use_keychain()
+        return not self._backup_uses_keychain()
 
     # -- backup credential backends ---------------------------------------
     #
@@ -1222,7 +1242,7 @@ class CredentialStore:
                     if decoded:
                         return decoded
                     # Empty/whitespace .enc is not a real backup → try the Keychain.
-        if self._host.platform == Platform.MACOS:
+        if self._backup_keychain_enabled():
             try:
                 return self._kc_read_backup(account_num, email)
             except macos_keychain.KEYCHAIN_ERRORS as e:
@@ -1257,7 +1277,7 @@ class CredentialStore:
         value = self._read_account_credentials(account_num, email, failed)
         if value:
             return value, False
-        if self._host.platform != Platform.MACOS:
+        if not self._backup_keychain_enabled():
             return "", bool(failed)
         # Whether THIS read reached the Keychain, observed at the read itself.
         #
@@ -1321,7 +1341,7 @@ class CredentialStore:
         a /login.
         """
         self._retain_previous_backup(account_num, email, credentials)
-        if self._use_keychain():
+        if self._backup_uses_keychain():
             try:
                 self._kc_write_backup(account_num, email, credentials)
             except macos_keychain.KEYCHAIN_ERRORS as e:
@@ -1341,7 +1361,7 @@ class CredentialStore:
         except Exception as e:
             self._host._logger.warning(f"Failed to write credentials file: {e}")
             raise
-        if self._host.platform == Platform.MACOS:
+        if self._backup_keychain_enabled():
             self._delete_backup_keychain_quiet(account_num, email)
 
     def _delete_account_credentials(self, account_num: str, email: str) -> None:
@@ -1363,7 +1383,7 @@ class CredentialStore:
                     enc_file.unlink()
             except Exception as e:
                 self._host._logger.warning(f"Failed to delete credentials file: {e}")
-            if self._host.platform == Platform.MACOS:
+            if self._backup_keychain_enabled():
                 self._delete_backup_keychain_quiet(num, email)
             self.delete_previous_backup(num, email)
 
@@ -1396,7 +1416,7 @@ class CredentialStore:
         # (missing_ok), permission/I/O errors must abort the commit.
         try:
             self._backup_enc_path(account_num, email).unlink(missing_ok=True)
-            if self._host.platform == Platform.MACOS:
+            if self._backup_keychain_enabled():
                 self._kc_delete_backup(account_num, email)
         except (OSError, *macos_keychain.KEYCHAIN_ERRORS) as e:
             raise CredentialError(
@@ -1432,7 +1452,7 @@ class CredentialStore:
                 prev_file.unlink()
         except Exception as e:
             self._host._logger.warning(f"Failed to delete .prev file: {e}")
-        if self._host.platform == Platform.MACOS:
+        if self._backup_keychain_enabled():
             try:
                 self._kc_delete_backup_prev(account_num, email)
             except Exception as e:
@@ -1508,7 +1528,7 @@ class CredentialStore:
         if not current or current == new_credentials:
             return
         try:
-            if self._use_keychain():
+            if self._backup_uses_keychain():
                 self._kc_call(
                     macos_keychain.set_password,
                     SECURITY_SERVICE,
@@ -1540,7 +1560,7 @@ class CredentialStore:
                     return decoded
             except Exception as e:
                 self._host._logger.warning(f"Failed to read .prev file: {e}")
-        if self._host.platform == Platform.MACOS:
+        if self._backup_keychain_enabled():
             try:
                 return self._kc_call(
                     macos_keychain.get_password,

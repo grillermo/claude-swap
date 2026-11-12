@@ -67,7 +67,26 @@ class UiSettings:
     theme: str = "auto"
 
 
-_SECTION_DEFAULT_SOURCES = {"autoswitch": AutoSwitchSettings, "ui": UiSettings}
+@dataclass(frozen=True)
+class StorageSettings:
+    """Where credentials live (``storage`` section).
+
+    ``backup_keychain`` routes the per-account backups (and their ``.prev``
+    generation) to the macOS Keychain. Off, they live only in the base64
+    ``.enc`` files under ``credentials/``, as on Linux — no ``security`` call
+    can fail on a locked Keychain or a Background (SSH/tmux) session. Claude
+    Code's own Keychain items are still read; this setting only governs what
+    cswap itself stores.
+    """
+
+    backup_keychain: bool = True
+
+
+_SECTION_DEFAULT_SOURCES = {
+    "autoswitch": AutoSwitchSettings,
+    "ui": UiSettings,
+    "storage": StorageSettings,
+}
 
 
 @dataclass(frozen=True)
@@ -138,6 +157,10 @@ SETTING_SPECS: dict[str, SettingSpec] = {
         SettingSpec(
             "ui", "theme", "theme", "choice", choices=("dark", "light", "auto"),
             help="Color theme; auto follows the terminal background",
+        ),
+        SettingSpec(
+            "storage", "backupKeychain", "backup_keychain", "bool",
+            help="Keep account backups in the macOS Keychain (false: .enc files only)",
         ),
     )
 }
@@ -246,6 +269,23 @@ def load_ui_settings(backup_root: Path) -> UiSettings:
         )
         return default
     return UiSettings(theme=theme)
+
+
+def load_storage_settings(backup_root: Path) -> StorageSettings:
+    """Load the storage section; missing/corrupt file or non-bool → default."""
+    raw = _read_raw(settings_path(backup_root))
+    section = raw.get("storage")
+    default = StorageSettings()
+    if not isinstance(section, dict):
+        return default
+    value = section.get("backupKeychain", default.backup_keychain)
+    if not isinstance(value, bool):
+        _logger.warning(
+            "settings.json: storage.backupKeychain must be true or false, got %r; using %r",
+            value, default.backup_keychain,
+        )
+        return default
+    return StorageSettings(backup_keychain=value)
 
 
 def save_settings(backup_root: Path, settings: AutoSwitchSettings) -> None:
@@ -412,6 +452,7 @@ def effective_settings(backup_root: Path) -> list[tuple[SettingSpec, object, boo
     loaded = {
         "autoswitch": load_settings(backup_root),
         "ui": load_ui_settings(backup_root),
+        "storage": load_storage_settings(backup_root),
     }
     rows = []
     for spec in SETTING_SPECS.values():
