@@ -9,6 +9,8 @@ own features, and where the last sync stopped.
 - Remote `github` is the fork (`git@github.com:grillermo/claude-swap.git`).
 - The fork's branch is `main`; upstream's is `main`.
 - Fork point: `9aa6d029` (2026-09-20, "Merge pull request #364 from BarganConstantin/fix/update-check-prerelease").
+- Last sync: 2026-11-12, merged upstream through `b0422837` (2026-11-12, upstream version
+  `1.2.0b1`); 241 commits, no reverts.
 
 **Pointed at this file with no other task, sync the fork: follow [Syncing](#syncing) end to end.**
 
